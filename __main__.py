@@ -1,125 +1,207 @@
 import os
+import io
 import random
-from gui_layout import column_L_img, column_R_img, source_frame
 import PySimpleGUI as sg
-from PIL import Image
-from display_frame import DisplayFrame
-import image_utility as ig
-from image_utility import generate_ranstring as ranstring
-
-"""
-    5/31 - Key Error 0 from gui_screen1 to gui_screen2
-      --List 'values' does not exist yet
-    6/1 -- Refactored to one screen.
-        --"values" variable in run() does not update with changed values
-            --need refresh? or read? something else?
-            --key is functional, no value attached to it
-            --enable_events parameter for input objects
-
-    if event == 'Show':
-        # Update the "output" text element to be the value of "input" element
-        window['-OUTPUT-'].update(values['-IN-'])
-
-    window['-OUTPUT-'] returns the element that has the key '-OUTPUT-'.
-    Then the update method for that element is called so that the value of the
-    Text Element is modified. Be sure you have supplied a size that is large
-    enough to display your output. If the size is too small, the output will be
-    truncated.
-
-    Update Elements Notes:
-    There are two important concepts when updating elements!
-
-        If you need to interact with elements prior to calling window.read() 
-        you will need to "finalize" your window first using the finalize 
-        parameter when you create your Window. "Interacting" means 
-        calling that element's methods such as update, expand, draw_line, etc.
-        Your change will not be visible in the window until you either:
-            A. Call window.read() again
-            B. Call window.refresh()
-"""
+import PIL.Image
+import glob as gl
+import string
 
 
-# TO DO integrate the display frames and frame manager functions
-class RandomImageSelector():
+ref_folder_l = r'.'
+ref_folder_r = r'.'
+export_folder = r'.'
 
-    # Layout Function
-    def layout_(self):
-        return [[sg.Col(source_frame(), justification='center')],
-                [sg.Col(column_L_img(), justification='left'),
-                 sg.Col([[sg.Button('Reroll')]], vertical_alignment='top'),
-                 sg.Col(column_R_img(), justification='right')]]
 
-    def __init__(self):
-        self.layout = self.layout_()
-        self.export_folder = os.getcwd()
-        self.ref_folder = os.getcwd()
-        self.left_frame = DisplayFrame()
-        self.right_frame = DisplayFrame()
-        self.window = sg.Window('Random Image Selector', self.layout)
+def generate_ranstring():
+    letters = string.ascii_lowercase
+    result_str = ''.join(random.choice(letters) for i in range(10))
+    return str(result_str)
 
-    def run(self):
-        # values for inputs that "stay on the screen"--folders
-        # values variable are also key, value inputs. dictionary items
-        # events for triggering the run loop
-        while True:
-            self.event, self.values = self.window.read()
-            print(self.event, self.values)
 
-            if self.event == sg.WIN_CLOSED:
-                break
+def compare_image_sizes(image1, image2):
+    # Args: 2 Image Files
+    # Returns -- 1st larger image, 2nd smaller image
+    larger_image = max(image1.Image.size, image2.Image.size)
+    smaller_image = min(image1.Image.size, image2.Image.size)
+    return larger_image, smaller_image
 
-            if self.event == 'L_previous':
-                # make current image show the last rolled image
-                pass
 
-            if self.event == 'R_previous':
-                pass
+def merge_images(image1, image2):
+    # Compare and resize image to match small of the 2
+    # find small, reduce large image to it's size --
+    # do this in *one* line of code
+    # get height, width of image
+    large_img, small_img = compare_image_sizes(image1, image2)
+    large_img = large_img.resize((small_img.height, small_img.width))
+    new_image = PIL.Image.new('RGB', (2*small_img.size[0], small_img.size[1]),
+                                 (250, 250, 250))
+    new_image.paste(small_img, (0, 0))
+    new_image.paste(large_img, (small_img.size[0], 0))
+    return new_image
 
-            if self.event == 'Reroll':
-                # Set reference folder to the new folder
-                # self.window['ref_folder'].update(self.ref_folder)
-                if self.values['L_lock'] is False:
-                    self.window['L_canvas'].update\
-                    (random.choice(self.left_frame.image_pool))
-                    # (self.left_frame.roll_image())
-                if self.values['R_lock'] is False:
-                    self.window['R_canvas'].update\
-                    (random.choice(self.right_frame.image_pool))
-                    # (self.right_frame.roll_image())
 
-            # Get Value
-            if self.event == 'Export':
-                # Set export folder to the new folder
-                self.export_folder = self.window['export_folder'].\
-                                     update(self.export_folder)
-                self.export_image()
+def export_image(merged_image):
+    merged_image.PIL.Image.save(export_folder + "img_" + generate_ranstring() + ".jpg", "JPEG")
 
-        self.window.close()
 
-        for key, value in self.values.items():
-            print(key, value)
+# Needs to have a working directory confirmed
+def list_images():
+    files = gl.glob('*.png') + gl.glob('*.gif') + gl.glob('*.jpg')
+    return files
 
-    @property
-    def export_folder(self):
-        return self.export_folder_
 
-    @export_folder.setter
-    def export_folder(self, export_folder):
-        if os.path.isdir(export_folder):
-            self.export_folder_ = export_folder
+def make_square(im, min_size=256, fill_color=(0, 0, 0, 0)):
+    x, y = im.size
+    size = max(min_size, x, y)
+    new_im = PIL.Image.new('RGBA', (size, size), fill_color)
+    new_im.paste(im, (int((size - x) / 2), int((size - y) / 2)))
+    return new_im
 
-    @property
-    def merged_image(self):
-        return ig.merge_images(self.left_frame.current_image,
-                               self.left_frame.current_image)
 
-    def export_image(self):
-        original_wd = os.getcwd()
-        os.chdir(self.export_folder)
-        self.merged_image.Image.save("img_" + ranstring() + ".jpg", "JPEG")
-        os.chdir(original_wd)
+def convert_to_bytes(file_or_bytes, resize=None, fill=False):
+    """
+    Will convert into bytes and optionally resize an image that is a file or a base64 bytes object.
+    Turns into  PNG format in the process so that can be displayed by tkinter
+    :param file_or_bytes: either a string filename or a bytes base64 image object
+    :type file_or_bytes:  (Union[str, bytes])
+    :param resize:  optional new size
+    :type resize: (Tuple[int, int] or None)
+    :param fill: If True then the image is filled/padded so that the image is not distorted
+    :type fill: (bool)
+    :return: (bytes) a byte-string object
+    :rtype: (bytes)
+    """
+    if isinstance(file_or_bytes, str):
+        img = PIL.Image.open(file_or_bytes)
+    else:
+        try:
+            img = PIL.Image.open(io.BytesIO(base64.b64decode(file_or_bytes)))
+        except Exception as e:
+            dataBytesIO = io.BytesIO(file_or_bytes)
+            img = PIL.Image.open(dataBytesIO)
 
-# Create the class
-image_selector = RandomImageSelector()
-# run the event loop
-image_selector.run()
+    cur_width, cur_height = img.size
+    if resize:
+        new_width, new_height = resize
+        scale = min(new_height / cur_height, new_width / cur_width)
+        img = img.resize((int(cur_width * scale), int(cur_height * scale)), PIL.Image.ANTIALIAS)
+    if fill:
+        if resize is not None:
+            img = make_square(img, resize[0])
+    with io.BytesIO() as bio:
+        img.save(bio, format="PNG")
+        del img
+        return bio.getvalue()
+
+
+# Layout Generator Functions
+def img_buttons(justify):
+    if justify == 'L':
+        return [[sg.Button('<<< Previous Image', k='-L-PREVIOUS-'),
+                 sg.Checkbox(text='Lock', k='-L-LOCK-')]]
+    elif justify == 'R':
+        return [[sg.Checkbox(text='Lock', k='-R-LOCK-'),
+                 sg.Button('Previous Image >>>', k='-R-PREVIOUS-')]]
+
+# TO DO -- Break Reference Folders into 2, -L-REF-FOLDER- and -R-REF-FOLDER-
+def source_column():
+    return [[sg.Radio('Local', 1, k='-LOCAL-RADIO-', default=True),
+             sg.Text('Left Source:'),
+             sg.InputText(k='L-REF-FOLDER-'), sg.FolderBrowse(k='L-REF-BROWSE-')],
+            [sg.Radio('Web ', 1, k='-WEB-RADIO'),
+             sg.Text('Export:', size=(15, 1)),
+             sg.InputText(k='-EXPORT-FOLDER-'),
+             sg.FolderBrowse(k='-EXPORT-BROWSE')]]
+
+
+def image_element(side):
+    return [[sg.Image(k = '-' + side + '-IMAGE-',
+            background_color = 'Light Grey', size=(60, 80))]]
+
+
+# TO DO -- Add Individual Ref Folders and Thumbnails of Previous Images
+def column_img(side):
+    return [[sg.Column(img_buttons(side), justification='center')],
+            [sg.Column(image_element(side), justification='center')],
+            [sg.Input(default_text='', k = '-' + side + '-IMG-TAGS')]]
+
+
+def reroll_button():
+    return [[sg.Button('Reroll')]]
+
+
+def export_column():
+    return [[sg.Text('Export:'), sg.InputText(k='-EXPORT-FOLDER-'),
+            sg.FolderBrowse(), sg.Button('Export')]]
+
+
+layout = [
+            [sg.Column(source_column(), justification='center')],
+            [sg.Column(column_img('L'), justification='left'), sg.Column(column_img('R'), justification='right')],
+            [sg.Column(export_column(), justification='center')]
+        ]
+
+
+for element in layout:
+    print(element)
+    print(type(element))
+    if element is type(list):
+        for subelement in element:
+            print(subelement)
+            print(type(subelement))
+
+#sg.Column(reroll_button())
+
+window = sg.Window('Random Image Selector', layout = layout)
+
+files_l = [os.path.join(ref_folder_l, l) for l in os.listdir(ref_folder_l) if l.endswith('png')]
+files_r = [os.path.join(ref_folder_r, r) for r in os.listdir(ref_folder_r) if r.endswith('png')]
+
+previous_imgs_l = []
+previous_imgs_r = []
+
+# Event Loop
+while True:
+    event, values = window.read()
+
+    if event == sg.WIN_CLOSED:
+        break
+
+    if event == '-L-PREVIOUS-':
+        # make current image show the last rolled image
+        pass
+
+    if event == '-R-PREVIOUS-':
+        pass
+
+    if event == 'Reroll':
+        # Set reference folder to the new folder
+        # window['ref_folder'].update(ref_folder)
+        if values['-L-LOCK-'] is False:
+            previous_imgs_l.append.window['-L-IMAGE-']      #append current image to previous images list
+            window['-L-IMAGE-'].update(random.choice(files_l))
+        if values['-R-LOCK-'] is False:
+            previous_imgs_r.append.window['-R-IMAGE-']
+            window['-R-IMAGE-'].update(random.choice(files_r))
+
+
+    # Get Value
+    if event == 'Export':
+        # Set export folder to the new folder
+        export_folder = window['-EXPORT-FOLDER-'].update(export_folder)
+        merged_image = merge_images(values['-L-IMAGE-'], values['-R-IMAGE-'])
+        export_image(merged_image)
+
+
+window.close()
+
+
+for key, value in values.items():
+    print(key, value)
+
+
+
+
+
+
+
